@@ -1,0 +1,317 @@
+---
+title: "Fast typers on keyboards type faster on smartphones"
+author: "Yutong Lu"
+date: "`r Sys.Date()`"
+output: pdf_document
+header-includes:
+  - \usepackage{titling}
+  - \setlength{\droptitle}{7cm}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r for visualization, message = FALSE, echo=FALSE}
+# load libraries
+library(tidyverse)
+library(stringr)
+library(lme4)
+library(lmerTest)
+library(lmtest)
+library(ggplot2)
+library(car)
+library(MuMIn)
+library(kableExtra)
+library(vtable)
+library(patchwork)
+library(gtsummary)
+
+# import data
+typing <- read.csv("typingdata.csv")
+
+# change column names first
+colnames(typing) <- c("keyboard_wpm_1", "keyboard_acc_1", 
+                      "keyboard_wpm_2", "keyboard_acc_2", 
+                      "keyboard_wpm_3", "keyboard_acc_3",
+                      "phone_wpm_1", "phone_acc_1", 
+                      "phone_wpm_2", "phone_acc_2", 
+                      "phone_wpm_3", "phone_acc_3",
+                      "number_of_finger", "phone_type",
+                      "screen_size", "keyboard_type",
+                      "age", "keyboard_freq", "gamer_status",
+                      "keyboard_instrument", "physical_limitation",
+                      "English_fluency")
+
+# remove WPM and %
+typing$keyboard_wpm_1 <- str_remove(typing$keyboard_wpm_1, "WPM")
+typing$keyboard_wpm_2 <- str_remove(typing$keyboard_wpm_2, "WPM")
+typing$keyboard_wpm_3 <- str_remove(typing$keyboard_wpm_3, "WPM")
+
+typing$keyboard_acc_1 <- str_remove(typing$keyboard_acc_1, "%")
+typing$keyboard_acc_2 <- str_remove(typing$keyboard_acc_2, "%")
+typing$keyboard_acc_3 <- str_remove(typing$keyboard_acc_3, "%")
+
+typing$phone_wpm_1 <- str_remove(typing$phone_wpm_1, "WPM")
+typing$phone_wpm_2 <- str_remove(typing$phone_wpm_2, "WPM")
+typing$phone_wpm_3 <- str_remove(typing$phone_wpm_3, "WPM")
+
+typing$phone_acc_1 <- str_remove(typing$phone_acc_1, "%")
+typing$phone_acc_2 <- str_remove(typing$phone_acc_2, "%")
+typing$phone_acc_3 <- str_remove(typing$phone_acc_3, "%")
+
+typing[,1:12] <- lapply(typing[,1:12], as.numeric)
+
+# change the screen size to numeric type
+
+# change one value of "length x width" to be separated by ";"
+typing$screen_size <- str_replace_all(typing$screen_size, "x", ";")
+# remove all alphabetical letters
+typing$screen_size <- str_replace_all(typing$screen_size, "[:alpha:]", "")
+
+# remove anything after the last ; if there are more than 1 ;
+rmv <- ifelse(str_count(typing$screen_size, ";") > 1, 
+       gsub('^(.*);.*$', '\\1', typing$screen_size),
+       typing$screen_size)
+
+# create a vector of new screen size
+new_ss <- numeric(length(rmv))
+
+# calculate the diag length for the two observations
+for (i in 1:length(rmv)){
+  new_ss[i] <- ifelse(str_count(rmv[i], ";") > 0, # if there is ;
+                   ifelse(as.numeric(str_split(rmv[i], ";")[[1]][1]) > 20, # if measured in mm
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1])/10)^2 +
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2])/10)^2),
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1]))^2 + # if measured in cm
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2]))^2)), 
+                   rmv[i]) # if no ;
+}
+
+typing$screen_size <- as.numeric(new_ss)
+
+typing <- typing %>% 
+  mutate(keyboard_type = 
+           case_when(
+             keyboard_type == "A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)" ~ "laptop",
+             TRUE ~ "mechanical"),
+         English_fluency =
+           case_when(English_fluency == "Conversational fluency in English" ~ "conversational",
+                     English_fluency == "Professional fluency in English" ~ "professional",
+                     TRUE ~ "fully"),
+         screen_size = case_when(screen_size < 10 ~ round(screen_size*2.54,4), 
+                                 TRUE ~ round(screen_size,4)),
+         keyboard_wpm_avg = (keyboard_wpm_1 + keyboard_wpm_2 + keyboard_wpm_3)/3,
+         keyboard_acc_avg = (keyboard_acc_1 + keyboard_acc_2 + keyboard_acc_3)/3,
+         phone_wpm_avg = (phone_wpm_1 + phone_wpm_2 + phone_wpm_3)/3,
+         phone_acc_avg = (phone_acc_1 + phone_acc_2 + phone_acc_3)/3) # not relevant
+
+# round to 4 decimal places because the most in data is 4 
+# assuming there are errors in measuring and roundings in calculations, 
+# so added zeros instead of taking off zeros
+
+# create a tidy long dataset
+typing.long <- typing %>% 
+  mutate(id = seq(1,nrow(typing))) %>% 
+  pivot_longer(
+    keyboard_wpm_1:phone_acc_3,
+    names_to = c(".value", "time"),
+    names_pattern = "^(.+)_(.)") %>% 
+  select(c(15:20, 1:10))
+
+typing <- typing[,1:22] # remove non-relevant columns
+```
+
+\newpage
+
+# Abstract
+
+With the increased online communication using smartphones, people may be developing faster typing speeds on their phones. The mobile typing speed, however, may be associated with individuals' typing speed on physical keyboards and other features of the phone, keyboard, and individuals themselves. The purpose of this study is to investigate whether whether university students who type fast on keyboard also type faster using smartphones, and what other potential predictors may associate with phone typing speed. To account for the repeated measurements and the individual differences in typing, linear mixed models are used and subject random effects are included in the model. The final model is selected using Wald tests, which is the simplest adequate model with only significant predictors. Based on the selected model, we find that keyboard typing speed, phone typing accuracy and using an iPhone have a significant positive relationship with the phone typing speed, whereas keyboard typing accuracy has a significant negative relationship with phone typing speed, controlling for other covariates. The results also demonstrate that phone type has the greatest effect size on smartphone typing speed.
+
+# Introduction
+
+The heavy usage of smartphones and frequent online communication have contributed to the increasing typing speed on touchscreen phones, especially for the younger generation. Despite the physical differences between a keyboard and a touchscreen, the experiences and skills of keyboard typing may still be associated with the typing speed on mobile phones. Also, people may type at different speeds depending on their familiarity of the language used or whether they have any physical limitations. Simultaneously, activities that require quick reaction and constant finger movements such as video gaming and keyboard instruments may contribute to the typing speed on smartphones.
+
+In this study, the research question was to investigate whether university students who type fast on keyboard also type faster using smartphones, and what other potential variables may associate with smartphone typing speed. We expected keyboard typing skills and other activities involving finger movements may positively affect the phone typing speed, whereas physical limitations and lower language fluency may lead to slower typing on phones. A survey was conducted on 39 students in the course STA490, University of Toronto, and their typing speeds on both keyboard and smartphone and other relevant information were collected for this study. 
+  
+Following the introduction, Data Summary section describes the data collection and manipulation process and provided descriptive statistics to facilitate the analysis. Method section documents the process of model building and predictor selection process, in which linear mixed models would be used. Results section reports the final model and provide interpretation of the results in the context of the data. Finally, Discussion section concludes the findings in this analysis and address limitations as well as future considerations of this study. Appendix at the end displays a figure and a summary statistics table that are relevant to the analysis.
+
+# Data Summary
+
+The data were collected using survey questions via Microsoft Forms, and the participants were asked to report the self-tested keyboard and mobile phone typing speed using the website [*10FastFingers*](https://10fastfingers.com/typing-test/english). The data with a sample size of 39 consisted of 3 trials of the typing speed in units of words per minute (WPM) and typing accuracy as the percentage of correct keystrokes (%) on both smartphone and keyboard for 39 students in STA490, University of Toronto. Other variables related to the features of participants and typing trials were also recorded in the data, including age, English fluency, whether the participants identified themselves as gamers, played keyboard instruments or had physical limitations, phone and keyboard type, screen size of the phone, number of fingers used to type on phone, and the frequency of keyboard usage.
+
+The original data consisted of 39 observations, each for one survey response of one participant. Table 2 in Appendix provided an overview of the survey responses, including the mean and standard deviation, or count for each question option. From Table 2, there appeared to be a slight increase in the keyboard typing speed from trial 1 (mean = $53.3$) to trial 3 (mean = $57.0$), but other measurements seemed to be similar in their corresponding three trial measurements. Also, it was noticed that the categorical variable number of finger was extremely unbalanced, where only one person typed using one finger, as seen in Table 2 in Appendix. Thus, this variable was not included in the model. For analysis, the data were converted into 117 observations, each for one typing trial of one participant, 3 trials and thus 3 observations in total for one participant. 
+
+# Methods
+
+The outcome of interest in this analysis was the typing speed on smartphones, a continuous numeric variable. For each participant in the study, 3 repeated measurements of their typing speed on keyboard and smartphone were taken, which totaled to 12 measurements per person. The measurements from different participants were assumed to be independent, meaning the measurement of one participant does not give information about the measurement of another participant. Conversely, for both keyboard and smartphone, the repeated measurements from the same participant were assumed to be dependent, and different participants could be inherently different in terms of their typing speed and accuracy. However, this analysis aimed to generalize the results to the population of university students, whereas the typing speed differences between particular participants in this sample were not of interest. In other words, the goal was to account for this subject variability without making it a predictor and account for the repeated measurements from the same subject. Thus, it was appropriate to treat participants as random effects in the model, meaning that the participant effects were treated as random variables instead of fixed yet unknown parameters, so no estimates would be obtained for these random effects. On the contrary, fixed effects refer to the predictors in the model, in which their coefficient estimates would be obtained.
+
+To incorporate both random and fixed effects in the model for a continuous outcome variable, linear mixed models were used in the analysis. A linear mixed model estimates the coefficients of the fixed effects while taking the variation of random effects into account. A full model with participants as the random effect and all other appropriate variables in the data was fitted. The residuals of this model was examined for model assumption. If there were unexpected patterns when plotting residuals against fitted values or covariates, or the residuals deviated from Normal distribution, transformation would be applied on the outcome variable. Based on the full model and Wald tests on the coefficients, we had evidence that the predictors with p-values less than 0.05 were significant to the response, so they would be used in a reduced model. As a reference for variable selection, stepwise and automatic model selections would be performed on the full model, and the resulted models from these procedures would be compared to our reduced model. To keep the final model at an appropriate level of complexity, model with fewest insignificant predictors ($p>0.05$) would be selected as the final model.
+
+Finally, more complex models would be fitted with extra random effects if there were categorical variables in the final model. Likelihood ratio tests would be used to compare these models with the exact same fixed effects but different random effects and justify the selection of the final model. If non-significant p-values ($p>0.05$) were obtained from the likelihood ratio test, then the simpler model with only subject random effect would be preferred.
+
+# Results
+
+A full model was fitted with subject random effect and all variables except the unbalanced variable, number of fingers. A natural log transformation was applied to the response phone typing speed due to assumption violations spotted in the residual analysis. Figure 2 in Appendix showed that for each of the three trials, the natural log phone typing speed appeared to follow a Normal distribution roughly.
+
+A reduced model was fitted with the 4 significant predictors, keyboard typing speed, keyboard typing accuracy, phone typing accuracy, and phone type in the transformed full model and subject random effect, and all coefficients had significant p-values. All automatic selection procedures and likelihood ratio tests preferred the same reduced model.
+
+```{r final model}
+reduced.mod <- lmer(log(phone_wpm) ~ keyboard_wpm + phone_type + keyboard_acc + 
+                      phone_acc + (1 | id), data = typing.long)
+final <- summary(reduced.mod)$coef
+
+final <- cbind(final[,1],
+               exp(summary(reduced.mod)$coef[,1]),
+               exp(-summary(reduced.mod)$coef[,1]),
+               final[,2:4]) %>% round(4) %>% 
+  cbind(format(signif(final[,5],digits=4), scientific = T))
+
+rownames(final) <- c("Intercept", "Keyboard typing speed (WPM)", 
+                                  "Phone type: iPhone", 
+                                  "Keyboard typing accuracy (%)", 
+                                  "Phone typing accuracy (%)")
+final %>% 
+  kableExtra::kable(booktab = T,
+                    col.names = c("Estimate", "Exp(estimate)", "Exp(-estimate)",
+                                  "Standard Error",
+                                  "Degree of Freedom",
+                                  "Test statistic (t value)",
+                                  "P-value"),
+                    caption = "Model summary of the final model for natural log of phone typing speed") %>% 
+  kable_styling(latex_options = c("HOLD_position", "scale_down")) %>% 
+  footnote("Table 1 shows the estimates of predictor coefficents and the transformed estimates using exponentiation from the final selected model.")
+```
+
+The estimates for coefficients in the selected model were transformed back to the regular scale by exponentiation, where coefficient estimates had multiplicative effects on the original response. Table 1 was a summary for the model estimates of predictor coefficients in the final model. Based on Table 1, for an Android user with all-zero covariates, the baseline expected typing speed on smartphones was 18.783 words per minute. The expected phone typing speed increased by 1.010 times for every 1-unit increase in keyboard typing speed, controlling for phone type, keyboard typing accuracy and phone typing accuracy. This result may imply that the skill and experience of typing on keyboard could transfer to mobile typing, which agrees with our expectation and intuition that people who type fast on keyboard also type fast on smartphones.
+
+An iPhone user was expected to type 1.303 times faster on phones than an Android user with the same keyboard typing speed, keyboard typing accuracy and phone typing accuracy. There was a 1.013-time increase in the expected phone typing speed for every 1-unit increase in phone typing accuracy, controlling for phone type, keyboard typing speed and keyboard typing accuracy. Interestingly, there was a 1.012-time decrease in the expected phone typing speed for every 1-unit increase in keyboard typing accuracy, controlling for phone type, keyboard typing speed and phone typing accuracy. This may because people who type faster are prone to make mistakes, whereas people who type slower may pay more attention to which letters they are pressing on and thus have higher accuracy. As a result, this trade off may explain the negative association between keyboard typing accuracy and smartphone typing speed. However, this is not consistent with our findings of the positive relationship between phone typing accuracy and phone typing speed. This may because some smartphone keyboards incorporate automatic corrector or suggestive word prompts, which make smartphones typing both faster and more accurate.
+
+According to the Table 1, the p-value resulted from the Wald test for the coefficient of phone type was the largest ($p=1.624\times 10^{-4}$), whereas phone typing accuracy has the smallest p-value ($p=2.906\times 10^{-14}$). This suggested that the evidence for phone type being a significant predictor was relatively weaker compared to other predictors in this model, whereas the evidence for phone typing accuracy being significant was relatively the strongest. However, although the p-value for phone type was relatively the largest, it was still very small ($p<0.001$), providing strong evidence against the null hypothesis that the coefficient for phone type is zero. 
+
+Noticeably, Table 1 indicated that phone type had the greatest relative effect size of 0.2649-unit increase on the natural log of phone typing speed, whereas keyboard typing speed had the least relative size of effect of 0.0099-unit increase on the smartphone typing speed on a natural log scale, controlling for other predictors. Therefore, we could infer that in practice, type of the phone may have more impact on how fast a person can type on this phone than this person's inherent ability to type. This appears to be reasonable as many specifications of the phone such as RAM, processor, storage, could determine the upper limit of typing speed on the smartphone, especially if the phone is lagging during typing. Also, smartphones with Android operation system have greater variability in terms of brand and specifications compared to iOS, which is exclusively used in iPhone by Apple. Therefore, this relative variability contributes to the large difference between only two different phone types recorded in our data.
+
+```{r, echo=FALSE, message=FALSE, fig.height=4.5}
+p1 <- typing.long %>% 
+  ggplot(aes(keyboard_wpm, log(phone_wpm)))+
+  geom_smooth(method = "lm", se=F) +
+  geom_point(alpha = 0.6, size = 1) +
+  labs(
+    title = "1.A",
+    x = "Keyboard typing speed, WPM",
+    y = "ln(phone typing speed), ln(WPM)",
+  ) +
+  theme_minimal()
+
+p2 <- typing.long %>% 
+  ggplot(aes(keyboard_wpm, log(phone_wpm), color = phone_type))+
+  geom_smooth(method = "lm", se=F) +
+  geom_point(alpha = 0.6, size = 1) +
+  labs(
+    title = "1.B",
+    x = "Keyboard typing speed, WPM",
+    y = "ln(phone typing speed), ln(WPM)",
+    color = "Phone type"
+  ) +
+  theme_minimal()
+
+p3 <- typing.long %>% 
+  ggplot(aes(phone_acc, log(phone_wpm), color = phone_type))+
+  geom_smooth(method = "lm", se=F) +
+  geom_point(alpha = 0.6, size = 1) +
+  labs(
+    title = "1.C",
+    x = "Phone typing accuracy",
+    y = "ln(phone typing speed), ln(WPM)",
+    color = "Phone type"
+  ) +
+  theme_minimal()
+
+p4 <- typing.long %>% 
+  ggplot(aes(keyboard_acc, log(phone_wpm), color = phone_type))+
+  geom_smooth(method = "lm", se=F) +
+  geom_point(alpha = 0.6, size = 1) +
+  labs(
+    title = "1.D",
+    x = "Keyboard typing accuracy",
+    y = "ln(phone typing speed), ln(WPM)",
+    color = "Phone type"
+  ) +
+  theme_minimal()
+
+(p1 + p2) / (p3 + p4) +
+  plot_annotation(
+    caption = 'Figure 1. Scatterplots and fitted linear regression lines based on the final model. This figure depicts the unadjusted \n association between the significant predictors in the final model and natural log of phone typing speed in the data, \n using all data points and repeated measurements.') +
+  plot_layout(guides = 'collect') & 
+  theme(axis.title = element_text(size = 7),
+        plot.caption = element_text(hjust=0))
+```
+
+From Figure 1, it appeared that even unadjusted by other predictors, there appeared to be an association between the keyboard typing speed and natural log of phone typing speed using all data points. Without being grouped by phone type, the unadjusted slope for keyboard typing speed versus natural log of phone typing speed appeared to be positive, as shown in Figure 1.A. In Figure 1.B, 1.C and 1.D, two lines were fitted by phone types with different intercepts, corresponding to the significant categorical predictor phone types in the final model. The lines in Figure 1.A, 1.B and 1.C had positive slopes, which corresponded to the positive coefficients for keyboard typing speed and phone typing accuracy in Table 1, respectively. Conversely, in Figure 1.D, the scatterplot of keyboard typing accuracy versus natural log of phone typing speed, the fitted line for iPhone appeared to have a slope of zero, but the line for Android had a negative slope, making their relationship less clear but still corresponding to the negative coefficient of keyboard typing accuracy in Table 1. 
+
+As a result, regarding the research question, both the data and the final selected model suggested that university students with higher keyboard typing speed tended to have higher smartphone typing speed, controlling for their keyboard typing accuracy, phone type, and phone typing accuracy.
+
+# Discussion
+
+To summarize, the results suggested that a university student whose typing speed on keyboard is 1-unit greater is expected to have a 1.010-fold increase in smartphone typing speed as well, when the keyboard typing accuracy, type of smartphone, and phone typing accuracy are all the same. When other predictors were the same, 1-unit increase in phone typing accuracy was associated with 1.013-fold increase in expected phone typing speed. On the contrary, a 1-unit increase in the keyboard typing accuracy was associated with a 1.012-fold decrease in the expected phone typing speed when phone type, phone typing accuracy, and keyboard typing speed were kept the same. Among all predictors in the final model, phone type appeared to have the greatest effect size on the expected mobile typing speed, where the phone typing speed of iPhone users was expected to be 1.303-fold greater than that of Android users, for individuals with the same keyboard typing speed, keyboard typing accuracy, and phone typing accuracy. This suggested that in practice, the differences in the technical specifications of different mobile phone types may substantially influence the typing speed on smartphones.
+
+There were some limitations of this study. Firstly, the sample size of 39 in this study was relatively small, which may introduce bias in the results. Also, because this survey was only distributed within one class of students in STA490 in University of Toronto, students from other classes or other universities did not have the opportunity to participate in the study. Therefore, although we were able to account for subject differences by adding subject random effects, we could only generalize our results to a narrow population of senior university students in statistics-related discipline. The results of this analysis may not be well-generalized to the population of all university students. Furthermore, due to the similar characteristics among the survey participants, the response for some of the questions were similar, such as age, keyboard using frequency and number of finger used to type on smartphones. As a result, with little variability, we were not able to detect and explore the effect of these variables on mobile typing speed. Also, the definition of gamer or the levels of English fluency were not provided in the survey questions, so the answers to these questions were largely based on the self-identification and subjective experiences of the participants. If all relevant terms were formally defined in the survey, it is possible that participants would provide different responses. Thus, the undefined questions could introduced bias into the results. Another possible limitation is the question about phone type only contains two categories, iPhone and Android, but iPhone is strictly from the company Apple whereas there are a wide variety of of brands all using the mobile operating system Android. Thus, there may be other confounders that were not accounted for, so other specifications of the smartphones, such as year of distribution, RAM or the exact phone model, could be recorded along with the phone type to avoid bias in our analysis. Also, with the exact information of smartphone model, we could gather the screen size information from the supplier or product website to avoid the impreciseness in self-measurement.
+
+As a result, in future studies, we could distribute the typing speed survey to a wider variety of people and record their demographic features. In this way, we may generalize our results to a wider population, which may be more meaningful to the general public. Meanwhile, the questions in the survey for future investigation could be defined more clearly to reduce arbitrary answers, and the measurements would be asked to be entered in the required unit. Also, more variables including demographic features and phone specifications could be included to reduce potential confounder effects.
+
+# Appendix
+
+```{r, fig.height=2.7}
+typing.long %>% 
+  mutate(time = case_when(time == 1 ~ "Trial 1",
+                          time == 2 ~ "Trial 2",
+                          time == 3 ~ "Trial 3")) %>% 
+  ggplot(aes(x=log(phone_wpm))) +
+  geom_histogram(binwidth = 0.2, color = "white") +
+  facet_grid(~ time) + 
+  labs(
+    y = "Count",   
+    x = "Natural log of phone typing speed, ln(WPM)",
+    caption = "Figure 2. Histograms of the natural log of smartphone typing speed. It shows that the distributions of natural \n log of phone typing speed for trial 1, 2, 3 are roughly bell-shaped and symmetric, implying that they follow \n Normal distributions roughly.") +
+  theme_minimal() +
+  theme(plot.caption = element_text(hjust=0))
+```
+
+
+```{r, message=F}
+typing[,c(1,3,5,2,4,6,7,9,11,8,10,12:22)] %>% 
+  tbl_summary(
+      statistic = list(all_continuous() ~ "{mean} ({sd})", 
+                       all_categorical() ~ "{n} ({p}%)"),
+      digits = all_continuous() ~ 1,                              
+      type   = all_categorical() ~ "categorical",                
+      label  = list(                                            
+        keyboard_wpm_1 ~ "Keyboard WPM (trial 1)",
+        keyboard_wpm_2 ~ "Keyboard WPM (trial 2)",
+        keyboard_wpm_3 ~ "Keyboard WPM (trial 3)",
+        keyboard_acc_1 ~ "Keyboard accuracy (trial 1)",
+        keyboard_acc_2 ~ "Keyboard accuracy (trial 2)",
+        keyboard_acc_3 ~ "Keyboard accuracy (trial 3)",
+        phone_wpm_1 ~ "Phone WPM (trial 1)",
+        phone_wpm_2 ~ "Phone WPM (trial 2)",
+        phone_wpm_3 ~ "Phone WPM (trial 3)",
+        phone_acc_1 ~ "Phone accuracy (trial 1)",
+        phone_acc_2 ~ "Phone accuracy (trial 2)",
+        phone_acc_3 ~ "Phone accuracy (trial 3)",
+        number_of_finger ~"Number of finger",
+        phone_type ~ "Type of phone",
+        screen_size ~ "Phone screen size (diagonal in cm)",
+        keyboard_type ~ "Type of keyboard",
+        age ~ "Age",
+        keyboard_freq ~ "Keyboard usage frequency",
+        gamer_status ~ "Gamer status",
+        keyboard_instrument ~ "Keyboard instrument",
+        physical_limitation ~ "Physical limitation",
+        English_fluency ~"English fluency"),
+      missing_text = "Missing"                                   
+    )  %>% 
+  modify_caption("Paticipant Characteristics") %>% 
+  as_kable_extra(booktab = T,
+                 linesep = "") %>% 
+  kable_styling(font_size = 11)
+```

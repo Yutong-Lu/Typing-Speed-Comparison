@@ -1,0 +1,456 @@
+---
+title: "Typing Data Exploratory Data Analysis"
+author: "Yutong Lu - 1005738356"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+---
+
+# Research quesiton
+
+**Do people who type fast on a keyboard also type faster on their mobile phones?**
+
+# Data cleaning
+
+```{r setup, message = FALSE}
+# load libraries
+library(tidyverse)
+library(stringr)
+library(kableExtra)
+library(patchwork)
+```
+
+```{r data cleaning}
+# import data
+typing <- read.csv("typingdata.csv")
+
+# change column names first
+colnames(typing) <- c("keyboard_wpm_1", "keyboard_acc_1", 
+                      "keyboard_wpm_2", "keyboard_acc_2", 
+                      "keyboard_wpm_3", "keyboard_acc_3",
+                      "phone_wpm_1", "phone_acc_1", 
+                      "phone_wpm_2", "phone_acc_2", 
+                      "phone_wpm_3", "phone_acc_3",
+                      "number_of_finger", "phone_type",
+                      "screen_size", "keyboard_type",
+                      "age", "keyboard_freq", "gamer_status",
+                      "keyboard_instrument", "physical_limitation",
+                      "English_fluency")
+
+# remove WPM and %
+typing$keyboard_wpm_1 <- str_remove(typing$keyboard_wpm_1, "WPM")
+typing$keyboard_wpm_2 <- str_remove(typing$keyboard_wpm_2, "WPM")
+typing$keyboard_wpm_3 <- str_remove(typing$keyboard_wpm_3, "WPM")
+
+typing$keyboard_acc_1 <- str_remove(typing$keyboard_acc_1, "%")
+typing$keyboard_acc_2 <- str_remove(typing$keyboard_acc_2, "%")
+typing$keyboard_acc_3 <- str_remove(typing$keyboard_acc_3, "%")
+
+typing$phone_wpm_1 <- str_remove(typing$phone_wpm_1, "WPM")
+typing$phone_wpm_2 <- str_remove(typing$phone_wpm_2, "WPM")
+typing$phone_wpm_3 <- str_remove(typing$phone_wpm_3, "WPM")
+
+typing$phone_acc_1 <- str_remove(typing$phone_acc_1, "%")
+typing$phone_acc_2 <- str_remove(typing$phone_acc_2, "%")
+typing$phone_acc_3 <- str_remove(typing$phone_acc_3, "%")
+
+typing[,1:12] <- lapply(typing[,1:12], as.numeric)
+
+# change the screen size to numeric type
+
+# change one entry of "length x width" to be separated by ";"
+typing$screen_size <- str_replace_all(typing$screen_size, "x", ";")
+# remove all alphabetical letters
+typing$screen_size <- str_replace_all(typing$screen_size, "[:alpha:]", "")
+
+# remove anything after the last ; if there are more than 1 ;
+rmv <- ifelse(str_count(typing$screen_size, ";") > 1, 
+       gsub('^(.*);.*$', '\\1', typing$screen_size),
+       typing$screen_size)
+
+# create a vector of new screen size
+new_ss <- numeric(length(rmv))
+
+# calculate the diag length for the two observations
+for (i in 1:length(rmv)){
+  new_ss[i] <- ifelse(str_count(rmv[i], ";") > 0, # if there is ;
+                   ifelse(as.numeric(str_split(rmv[i], ";")[[1]][1]) > 20, # if measured in mm
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1])/10)^2 +
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2])/10)^2),
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1]))^2 + # if measured in cm
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2]))^2)), 
+                   rmv[i]) # if no ;
+}
+
+typing$screen_size <- as.numeric(new_ss)
+
+typing <- typing %>% 
+  mutate(keyboard_type = 
+           case_when(
+             keyboard_type == "A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)" ~ "laptop",
+             TRUE ~ "mechanical"),
+         English_fluency =
+           case_when(English_fluency == "Conversational fluency in English" ~ "conversational",
+                     English_fluency == "Professional fluency in English" ~ "professional",
+                     TRUE ~ "fully"),
+         screen_size = case_when(screen_size < 10 ~ round(screen_size*2.54,4), 
+                                 TRUE ~ round(screen_size,4)),
+         keyboard_wpm_avg = (keyboard_wpm_1 + keyboard_wpm_2 + keyboard_wpm_3)/3,
+         keyboard_acc_avg = (keyboard_acc_1 + keyboard_acc_2 + keyboard_acc_3)/3,
+         phone_wpm_avg = (phone_wpm_1 + phone_wpm_2 + phone_wpm_3)/3,
+         phone_acc_avg = (phone_acc_1 + phone_acc_2 + phone_acc_3)/3)
+
+# round to 4 decimal places because the most in data is 4 
+# assuming there are errors in measuring and roundings in calculations, 
+# so added zeros instead of taking off zeros
+
+# create a tidy long dataset
+typing_long <- typing %>% 
+  mutate(id = seq(1,nrow(typing))) %>% 
+  pivot_longer(
+    keyboard_wpm_1:phone_acc_3,
+    names_to = c(".value", "time"),
+    names_pattern = "^(.+)_(.)"
+  )
+```
+
+First of all, for clarity and ease of manipulation, the column names were changed from the questions from the original survey to shortened keywords that described and summarised the content of each question.
+
+Initially, the type of all the variables except age in the data were character, regardless of the nature of the survey questions. The characters "WPM" and "%" in the 12 variables recording the speed and accuracy of keyboard and mobile phone typing were first removed from the character strings to successfully convert these variables from character type to numeric type.
+
+However, in the variable for mobile phone screen sizes, not all entries were a strictly diagonal length of the phone screen in units of centimetres. More noticeably, one entry was of the format "width x length" in the units of milimetres, and one entry was of the format "length; width; depth" in the units of centimetres. Firstly, the entry of "width x length" was changed to be separated by the delimiter semicolon. Then, while keeping all delimiters, we removed all the alphabetical characters from the strings in this variable, including all the units added by the participants. A vector was created to remove the depth measurement of the special entry. In the variable screen size, if there were more than one delimiter, we removed anything including and after the last delimiter and added it into the vector. Otherwise, the vector would take the value of the original screen size entry. Then, another new temporary vector was created for the diagonal length calculation of the two special entries with delimiters. If there was a semicolon delimiter and the first measurement was greater than 20, then we decided that this entry was recorded in milimetres, and thus we calculated the diagonal length after dividing the original entry by 10. On the other hand, if there was a semicolon delimiter and the first measurement was smaller or equal to 20, then we decided that this entry was recorded in centimetres, and thus we calculated the diagonal length without unit conversion. If there was no semicolon delimiter, then we kept the original entry as the diagonal length and added it to the vector. Finally, we converted this vector into a numeric variable and added it to the data set as the new screen size variable.
+
+Then, categories of the variable keyboard type and the variable English fluency were changed into keywords to summarise the option in the question. Upon inspection, one entry of screen size was in the units of inches instead of centimetres, so any entries smaller than 10 were multiplied by 2.54, and all other entries were kept the same. The values in the variable screen sizes were rounded to 4 decimal places because the most decimal places kept in the original data were 4. Finally, four variables were created for future exploration by averaging the keyboard typing speed and accuracy and the mobile phone typing speed and accuracy, respectively.
+
+# Examination of relevant variables
+
+## General inspection
+
+```{r}
+glimpse(typing)
+
+sum(is.na(typing)) # no missing values
+```
+
+## Keyboard typing speed (wpm)
+
+```{r keyboard wpm}
+kable(
+  typing %>% 
+  select(keyboard_wpm_1, keyboard_wpm_2, keyboard_wpm_3) %>% 
+  summary(),
+  booktab = T)
+
+
+typing %>% 
+  select(keyboard_wpm_1, keyboard_wpm_2, keyboard_wpm_3) %>% 
+    pivot_longer(cols = c(keyboard_wpm_1, keyboard_wpm_2, keyboard_wpm_3),
+                 names_to = "number", values_to = "keyboard_wpm") %>% 
+ggplot(aes(keyboard_wpm)) +
+  geom_histogram(binwidth = 3, color = "white") +
+  facet_grid(~ number) +
+  theme_minimal()
+```
+
+## Keyboard accuracy (%)
+
+```{r keyboard accuracy}
+kable(
+  typing %>% 
+  select(keyboard_acc_1, keyboard_acc_2, keyboard_acc_3) %>% 
+  summary(),
+  booktab = T)
+
+
+typing %>% 
+  select(keyboard_acc_1, keyboard_acc_2, keyboard_acc_3) %>% 
+    pivot_longer(cols = c(keyboard_acc_1, keyboard_acc_2, keyboard_acc_3),
+                 names_to = "number", values_to = "keyboard_accuracy") %>% 
+ggplot(aes(keyboard_accuracy)) +
+  geom_histogram(binwidth = 3, color = "white") +
+  facet_grid(~ number) +
+  theme_minimal()
+```
+
+## Mobile phone typing speed (wpm)
+
+```{r phone WPM}
+kable(
+  typing %>% 
+  select(phone_wpm_1, phone_wpm_2, phone_wpm_3) %>% 
+  summary(),
+  booktab = T)
+
+
+typing %>% 
+  select(phone_wpm_1, phone_wpm_2, phone_wpm_3) %>% 
+    pivot_longer(cols = c(phone_wpm_1, phone_wpm_2, phone_wpm_3),
+                 names_to = "number", values_to = "phone_wpm") %>% 
+ggplot(aes(phone_wpm)) +
+  geom_histogram(binwidth = 3, color = "white") +
+  facet_grid(~ number) +
+  theme_minimal()
+```
+
+## Mobile phone accuracy
+
+```{r phone accuracy}
+kable(
+  typing %>% 
+  select(phone_acc_1, phone_acc_2, phone_acc_3) %>% 
+  summary(),
+  booktab = T)
+
+
+typing %>% 
+  select(phone_acc_1, phone_acc_2, phone_acc_3) %>% 
+    pivot_longer(cols = c(phone_acc_1, phone_acc_2, phone_acc_3),
+                 names_to = "number", values_to = "phone_accuracy") %>% 
+ggplot(aes(phone_accuracy)) +
+  geom_histogram(binwidth = 3, color = "white") +
+  facet_grid(~ number) +
+  theme_minimal()
+```
+
+## Relationships among the four variables above
+
+```{r message = FALSE}
+# relationship between keyboard and phone wpm avg
+kp1 <- ggplot(typing, aes(keyboard_wpm_avg, phone_wpm_avg)) +
+  geom_point() +
+  geom_smooth() +
+  theme_minimal()
+
+# relationship between keyboard and phone accuracy avg
+kp2 <- ggplot(typing, aes(keyboard_acc_avg, phone_acc_avg)) +
+  geom_point() +
+  geom_smooth() +
+  theme_minimal()
+
+# relationship between keyboard wpm and accuracy
+kk1 <- ggplot(typing, aes(keyboard_acc_avg, keyboard_wpm_avg)) +
+  geom_smooth() +
+  geom_point() +
+  theme_minimal()
+
+# relationship between phone wpm and accuracy
+pp1 <- ggplot(typing, aes(phone_acc_avg, phone_wpm_avg)) +
+  geom_point() +
+  geom_smooth() +
+  theme_minimal()
+
+(kp1 | kp2) / (kk1 | pp1)
+```
+
+The figure above indicates that there seems to be a positive relationship between the average keyboard typing speed and average phone typing speed.
+
+## Keyboard-specific predictors
+
+```{r keyboard-specific predictors, message = FALSE}
+# keyboard type
+kt <- ggplot(typing, aes(keyboard_type)) +
+  geom_bar()+
+  theme_minimal()
+
+# ggplot(typing, aes(keyboard_wpm_avg)) +
+#   geom_freqpoly(aes(color = keyboard_type), binwidth = 3) +
+#   theme_minimal()
+# 
+# ggplot(typing, aes(keyboard_acc_avg)) +
+#   geom_freqpoly(aes(color = keyboard_type), binwidth = 1) +
+#   theme_minimal()
+
+kt1 <- ggplot(typing, aes(keyboard_wpm_avg)) +
+  geom_boxplot(aes(color = keyboard_type)) +
+  theme_minimal()
+
+kt2 <- ggplot(typing, aes(keyboard_acc_avg)) +
+  geom_boxplot(aes(color = keyboard_type)) +
+  theme_minimal()
+
+# keyboard freq, almost all every day or almost every day
+kf <- ggplot(typing, aes(keyboard_freq)) +
+  geom_bar() +
+  theme_minimal()
+
+(kt | kt1 | kt2) / kf +
+  patchwork::plot_layout(guides = 'collect') +
+  patchwork::plot_annotation(title = "keyboard-specific predictors")
+```
+
+The figure above indicates that people using a mechanical keyboard have higher median typing speed on average but slightly lower median typing accuracy on average. The number of people using keyboard a few times per week is too small, so no other plots are produced for this variable.
+
+## Phone-specific predictors
+
+```{r phone-specific predictors, message = FALSE}
+# phone type
+pt <- ggplot(typing, aes(phone_type)) +
+  geom_bar()+
+  theme_minimal()
+
+# ggplot(typing, aes(phone_wpm_avg)) +
+#   geom_freqpoly(aes(color = phone_type), binwidth = 3) +
+#   theme_minimal()
+# 
+# ggplot(typing, aes(phone_acc_avg)) +
+#   geom_freqpoly(aes(color = phone_type), binwidth = 1) +
+#   theme_minimal()
+
+pt1 <- ggplot(typing, aes(phone_wpm_avg)) +
+  geom_boxplot(aes(color = phone_type)) +
+  theme_minimal()
+
+pt2 <- ggplot(typing, aes(phone_acc_avg)) +
+  geom_boxplot(aes(color = phone_type)) +
+  theme_minimal()
+
+# number of fingers, almost all two fingers
+nf <- ggplot(typing, aes(number_of_finger)) +
+  geom_bar()+
+  theme_minimal()
+
+# screen size
+ss <- ggplot(typing, aes(screen_size)) +
+  geom_histogram(binwidth = 0.5, color = "white") +
+  theme_minimal()
+
+ss1 <- ggplot(typing, aes(screen_size, phone_wpm_avg)) +
+  geom_point() +
+  geom_smooth() +
+  theme_minimal()
+# looks like larger screen leads to lower speed -> more difficult to handle?
+
+ss2 <- ggplot(typing, aes(screen_size, phone_acc_avg)) +
+  geom_point() +
+  geom_smooth() +
+  theme_minimal()
+
+(pt | pt1 | pt2)/ (ss | ss1 | ss2) / nf +
+  patchwork::plot_layout(guides = 'collect', heights = c(3,3,2)) +
+  patchwork::plot_annotation(title = "phone-specific predictors")
+
+```
+
+From the figure above, it seems like the median phone wpm are more different when grouped by phone type, where people with iPhone has a higher typing speed on phone. On the other hand, the scatterplot indicates that screen size seems to be negatively related to the typing speed but slightly positively related to the typing accuracy on mobile phone. The number of people typing with one finger is too small, so no other plots are produced for this variable.
+
+## General predictors
+
+### Age
+
+```{r age, fig.height= 2}
+ggplot(typing, aes(age)) +
+  geom_histogram(binwidth = 1, color = "white") +
+  theme_minimal()
+
+for (i in 23:26){
+  print(ggplot(typing, aes(age, typing[,i])) + 
+          geom_point() + ylab(colnames(typing)[i]) + theme_minimal())
+}
+```
+It appears that age is not a significant predictor in this research. Similar patterns across the age groups are displayed in all four plots.
+
+
+### Keyboard instrument
+
+```{r keyboard instrument, fig.height=2}
+ggplot(typing, aes(keyboard_instrument)) +
+  geom_bar() +
+  theme_minimal()
+
+for (i in 23:26){
+  print(ggplot(typing, aes(typing[,i])) + 
+          geom_boxplot(aes(color = keyboard_instrument)) + 
+          xlab(colnames(typing)[i]) + theme_minimal())
+}
+```
+
+It appears that the fact that the observation plays keyboard instruments has more impact on accuracy than wpm, and it is a positive relationship.
+
+### Gamer status
+
+```{r  gamer status, fig.height=2}
+ggplot(typing, aes(gamer_status)) +
+  geom_bar() +
+  theme_minimal()
+
+for (i in 23:26){
+  print(ggplot(typing, aes(typing[,i])) + 
+          geom_boxplot(aes(color = gamer_status)) + 
+          xlab(colnames(typing)[i]) + theme_minimal())
+}
+```
+
+It appears that the fact that the observation self-identifies as a gamer has more impact on wpm than accuracy, and it is a positive relationship.
+
+### Physical limitations
+
+```{r physical limitation, fig.height=2}
+ggplot(typing, aes(physical_limitation)) +
+  geom_bar() +
+  theme_minimal()
+
+for (i in 23:26){
+  print(ggplot(typing, aes(typing[,i])) + 
+          geom_boxplot(aes(color = physical_limitation)) + 
+          xlab(colnames(typing)[i]) + theme_minimal())
+}
+```
+
+It appears that having physical limitations has negative impact on wpm and accuracy for both keyboard and phone.
+
+### English fluency
+
+```{r English fluency, fig.height=2}
+ggplot(typing, aes(English_fluency)) +
+  geom_bar() +
+  theme_minimal()
+
+for (i in 23:26){
+  print(ggplot(typing, aes(typing[,i])) + 
+          geom_boxplot(aes(color = English_fluency)) + 
+          xlab(colnames(typing)[i]) + theme_minimal())
+}
+```
+
+It appears that observations that are fully fluent in English have higher wpm but lower accuracy for both phone and keyboard.
+
+### Random effect
+
+```{r random effect, message=F}
+typing %>% 
+  ggplot(aes(keyboard_wpm_avg, phone_wpm_avg, color = phone_type)) + 
+    geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+    geom_point(aes(size = screen_size, shape = keyboard_instrument), alpha = 0.8) +
+     labs(titles = "Average speed of typing on keyboard vs mobile phone (wpm).",
+          shape = "Keyboard instrument",
+          size = "Diagonal screen size",
+          color = "phone type",
+          y = "Average typing speed on mobile phone (wpm)",   
+          x = "Average typing speed on keyboard (wpm)") +
+    theme_minimal()
+```
+
+It appears that the two lines fitted for different phone types have similar slope but different intercepts. It may suggest that phone type could be an intercept-only random effect in the model for typing speed on phone.
+
+# Preliminary insights
+
+## Key figure
+
+```{r key figure, message=F}
+typing %>% 
+  mutate(English_fluency = factor(English_fluency, levels = c("fully", 
+                                                              "professional", 
+                                                              "conversational"))) %>% 
+  ggplot(aes(keyboard_wpm_avg, phone_wpm_avg, color = English_fluency)) + 
+  # interaction between English fluency and keyboard wpm
+    geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+    geom_point(aes(shape = physical_limitation), size = 4, alpha = 0.8) +
+     labs(titles = "Average speed of typing on keyboard vs mobile phone (wpm).",
+          shape = "Physical limitation",
+          color = "English fluency",
+          y = "Average typing speed on mobile phone (wpm)",   
+          x = "Average typing speed on keyboard (wpm)") +
+    theme_minimal()
+```
+
+This plot demonstrates the relationship between the average typing speed on a keyboard and the average typing speed on a mobile phone in units of words per minute. In our sample, those with physical limitations have slower average typing speed for both keyboard and mobile phone, which can be indicated by the triangular-shaped points accumulating around the bottom left. Also, we fitted a line for each level of self-reported English fluency, and we can see that they have different slopes, meaning that there may be interactions between the average typing speed on the keyboard and English fluency. Comparing across three levels, we can also observe that subjects fully fluent in English have a relatively higher average typing speed for the keyboard and the mobile phone than those with conversational and professionally fluent English. Regardless, for all three levels of English fluency, the slopes of the lines are all positive, which provides insights into our research question. From this plot, we can infer a positive relationship between the average typing speed on the keyboard and the average typing speed on a mobile phone, and English fluency and physical limitations are potential predictors in the model.

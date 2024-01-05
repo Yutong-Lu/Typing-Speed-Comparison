@@ -1,0 +1,504 @@
+---
+title: "Do students who type fast on keyboard also type faster using smartphones?"
+subtitle: "STA490 Fall term project statistical analysis"
+author: "Yutong Lu - 1005738356"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+---
+
+# Introduction
+
+The heavy usage of smartphones and frequent online communication have contributed to the increasing typing speed on touchscreen phones that approaches keyboard typing speed, especially for the younger generation. Despite the physical differences between a keyboard and a touchscreen, the experiences and skills of keyboard typing may be associated with the typing speed on mobile phones. In this study, the research question was to investigate whether university students who type fast on keyboard also type faster using smartphones, and what other potential variables may associate with smartphone typing speed.
+
+The data were collected using survey questions, and the participants were asked to report the self-tested keyboard and mobile phone typing speed using the website [10FastFingers](https://10fastfingers.com/typing-test/english). The data consisted of 3 trials of the typing speed in units of words per minute and typing accuracy as the percentage of correct keystrokes on both smartphone and keyboard for 39 students in STA490, University of Toronto. Other variables related to the features of participants and typing trials were also recorded in the data, including age, English fluency, whether the participants identified themselves as gamers, played keyboard instruments or had physical limitations, phone and keyboard type, screen size of the phone, number of fingers used to type on phone, and the frequency of keyboard usage. 
+
+# Data cleaning
+
+```{r for visualization, message = FALSE, echo=FALSE}
+# load libraries
+library(tidyverse)
+library(stringr)
+library(lme4)
+library(lmerTest)
+library(lmtest)
+library(ggplot2)
+library(car)
+library(MuMIn)
+
+# import data
+typing <- read.csv("typingdata.csv")
+
+# change column names first
+colnames(typing) <- c("keyboard_wpm_1", "keyboard_acc_1", 
+                      "keyboard_wpm_2", "keyboard_acc_2", 
+                      "keyboard_wpm_3", "keyboard_acc_3",
+                      "phone_wpm_1", "phone_acc_1", 
+                      "phone_wpm_2", "phone_acc_2", 
+                      "phone_wpm_3", "phone_acc_3",
+                      "number_of_finger", "phone_type",
+                      "screen_size", "keyboard_type",
+                      "age", "keyboard_freq", "gamer_status",
+                      "keyboard_instrument", "physical_limitation",
+                      "English_fluency")
+
+# remove WPM and %
+typing$keyboard_wpm_1 <- str_remove(typing$keyboard_wpm_1, "WPM")
+typing$keyboard_wpm_2 <- str_remove(typing$keyboard_wpm_2, "WPM")
+typing$keyboard_wpm_3 <- str_remove(typing$keyboard_wpm_3, "WPM")
+
+typing$keyboard_acc_1 <- str_remove(typing$keyboard_acc_1, "%")
+typing$keyboard_acc_2 <- str_remove(typing$keyboard_acc_2, "%")
+typing$keyboard_acc_3 <- str_remove(typing$keyboard_acc_3, "%")
+
+typing$phone_wpm_1 <- str_remove(typing$phone_wpm_1, "WPM")
+typing$phone_wpm_2 <- str_remove(typing$phone_wpm_2, "WPM")
+typing$phone_wpm_3 <- str_remove(typing$phone_wpm_3, "WPM")
+
+typing$phone_acc_1 <- str_remove(typing$phone_acc_1, "%")
+typing$phone_acc_2 <- str_remove(typing$phone_acc_2, "%")
+typing$phone_acc_3 <- str_remove(typing$phone_acc_3, "%")
+
+typing[,1:12] <- lapply(typing[,1:12], as.numeric)
+
+# change the screen size to numeric type
+
+# change one value of "length x width" to be separated by ";"
+typing$screen_size <- str_replace_all(typing$screen_size, "x", ";")
+# remove all alphabetical letters
+typing$screen_size <- str_replace_all(typing$screen_size, "[:alpha:]", "")
+
+# remove anything after the last ; if there are more than 1 ;
+rmv <- ifelse(str_count(typing$screen_size, ";") > 1, 
+       gsub('^(.*);.*$', '\\1', typing$screen_size),
+       typing$screen_size)
+
+# create a vector of new screen size
+new_ss <- numeric(length(rmv))
+
+# calculate the diag length for the two observations
+for (i in 1:length(rmv)){
+  new_ss[i] <- ifelse(str_count(rmv[i], ";") > 0, # if there is ;
+                   ifelse(as.numeric(str_split(rmv[i], ";")[[1]][1]) > 20, # if measured in mm
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1])/10)^2 +
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2])/10)^2),
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1]))^2 + # if measured in cm
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2]))^2)), 
+                   rmv[i]) # if no ;
+}
+
+typing$screen_size <- as.numeric(new_ss)
+
+typing <- typing %>% 
+  mutate(keyboard_type = 
+           case_when(
+             keyboard_type == "A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)" ~ "laptop",
+             TRUE ~ "mechanical"),
+         English_fluency =
+           case_when(English_fluency == "Conversational fluency in English" ~ "conversational",
+                     English_fluency == "Professional fluency in English" ~ "professional",
+                     TRUE ~ "fully"),
+         screen_size = case_when(screen_size < 10 ~ round(screen_size*2.54,4), 
+                                 TRUE ~ round(screen_size,4)),
+         keyboard_wpm_avg = (keyboard_wpm_1 + keyboard_wpm_2 + keyboard_wpm_3)/3,
+         keyboard_acc_avg = (keyboard_acc_1 + keyboard_acc_2 + keyboard_acc_3)/3,
+         phone_wpm_avg = (phone_wpm_1 + phone_wpm_2 + phone_wpm_3)/3,
+         phone_acc_avg = (phone_acc_1 + phone_acc_2 + phone_acc_3)/3)
+
+# round to 4 decimal places because the most in data is 4 
+# assuming there are errors in measuring and roundings in calculations, 
+# so added zeros instead of taking off zeros
+
+# create a tidy long dataset
+typing.long <- typing %>% 
+  mutate(id = seq(1,nrow(typing))) %>% 
+  pivot_longer(
+    keyboard_wpm_1:phone_acc_3,
+    names_to = c(".value", "time"),
+    names_pattern = "^(.+)_(.)") %>% 
+  select(c(15:20, 1:10))
+```
+
+The raw data was loaded directly without any previous modifications. For clarity and ease of manipulation, the column names were changed from the questions in the original survey to shortened keywords that described and summarised the content of each question.
+
+Initially, the type of all the variables except age in the data were character, regardless of the nature of the survey questions. The characters "WPM" and "%" in the 12 variables recording the speed and accuracy of keyboard and mobile phone typing were first removed from the character strings to convert these variables from character type to numeric type successfully.
+
+However, in the variable for mobile phone screen sizes, not all values were strictly the diagonal length of the phone screens in units of centimetres. More noticeably, one value was of the format "width x length" in the units of millimetres, and one value was of the format "length; width; depth" in the units of centimetres. Firstly, the value with format "width x length" was changed to be separated by the delimiter semicolon. Then, while keeping all delimiters, all alphabetical characters were removed from the strings in this variable, including all the units added by the participants. A vector was created to remove the depth measurement of the special value. In the variable screen size, if there were more than one delimiter in one value, anything including and after the last delimiter were removed and then the value was added into the vector. Otherwise, the vector would take the value of the original screen size value. Then, another new temporary vector was created for the diagonal length calculation of the two special entries with delimiters. If there was a semicolon delimiter and the first measurement was greater than 20, this value was determined to be in the unit of millimetres, and thus the diagonal length was calculated after dividing the original value by 10. On the other hand, if there was a semicolon delimiter and the first measurement was smaller or equal to 20, this value was determined to have unit in centimetres, and thus the diagonal length was calculated without unit conversion. If there was no semicolon delimiter, the original value was kept as the diagonal length and added to the vector directly. Finally, this vector was converted into a numeric variable and added into the data set as the new screen size variable.
+
+Then, categories of keyboard type and English fluency were changed into keywords to summarise the options in the question. Upon inspection, one value of screen size was in the units of inches instead of centimetres, so any entries smaller than 10 were multiplied by 2.54, and all other entries were kept the same. The values in the variable screen sizes were rounded to 4 decimal places because the most decimal places kept in the original data were 4. Also, four variables were created for data exploration by averaging the keyboard typing speed and accuracy and the mobile phone typing speed and accuracy, respectively. Finally, the data were converted to the long format for the four variables of typing speed and accuracy on phone and keyboard, with additional id variable for each subject and time variable to indicate which trial the value was from.
+
+# Methods
+
+The response of this analysis was typing speed on smartphone, a continuous variable. The three observations from the same subject were assumed to be dependent, whereas different subjects were assumed to be independent. As a result, it was appropriate to include a random effect for subjects and use linear mixed models, instead of losing information by averaging three trials.
+
+The linear mixed model was specified in a general form $$\mathbf{y_i} = \mathbf{X}_i \boldsymbol \beta_i + \mathbf{Z_ib_i} + \boldsymbol \epsilon_i$$ where $\mathbf{y_i}$ was the response vector of phone typing speed for subject $i$. $\mathbf {X_i} \boldsymbol \beta_i$ were the model matrix and coefficient vector of fixed effects for subject $i$. $\mathbf{Z_ib_i}$ represented the model matrix and coefficient vector of random effects for subject $i$. $\boldsymbol \epsilon_i$ was the error term for subject $i$. Key assumptions of this model included that random effects and within-subject residual errors followed Normal distributions with constant variance, $\mathbf{b_i} \sim N(0, \Psi), \ \boldsymbol \epsilon_i \sim N(0, \Lambda_i)$.
+
+A full model with appropriate variables was fitted by restricted maximum likelihood (REML), and the model summary was inspected. The Normality and constant error variance assumptions would be accessed. If there were any serious violations, then transformation would be applied to the response without loss of model interpretability. Then, a reduced model would be fitted with those predictors with p values smaller than a significance level of $\alpha=0.05$ in the full model summary. As a reference, stepwise and automatic model selections based on the Akaike information criterion (AIC) and Bayesian information criterion (BIC) would be performed on the full model. The final model would be selected based on the significance of predictors in the model summaries and likelihood ratio tests on the candidate models refitted by maximum likelihood (ML). Finally, if applicable, more complex models would be fitted with extra random slopes for categorical variables in the final model. Likelihood ratio tests would be used to compare the REML models with the exact same fixed effects but different random effects and justify the selection of the final model.
+
+\newpage
+
+# Results
+
+A full model was fitted with subject random effect and all variables except the extremely unbalanced variable number of fingers. A natural log transformation was applied to the response due to assumption violations spotted in the residual analysis. A reduced model was fitted with the 4 significant predictors, keyboard typing speed, keyboard typing accuracy, phone typing accuracy, and phone type in the transformed full model and subject random effect, and all coefficients had significant p values. All automatic selection procedures and likelihood ratio tests performed preferred the same reduced model.
+
+The estimates for coefficients in the selected model were transformed back to the regular scale by exponentiation, where coefficient estimates had multiplicative effects on the original response. For an Android user with all-zero covariates, the baseline expected typing speed on smartphones was 18.783 words per minute. The expected phone typing speed increased by 1.010 times for every 1-unit increase in keyboard typing speed, controlling for phone type, keyboard typing accuracy and phone typing accuracy. An iPhone user was expected to type 1.303 times faster on phones than an Android user with the same keyboard typing speed, keyboard typing accuracy and phone typing accuracy. There was a 1.013-time increase in the expected phone typing speed for every 1-unit increase in phone typing accuracy, controlling for phone type, keyboard typing speed and keyboard typing accuracy. Conversely, there was a 1.012-time decrease in the expected phone typing speed for every 1-unit increase in keyboard typing accuracy, controlling for phone type, keyboard typing speed and phone typing accuracy.
+
+
+```{r, echo=FALSE, message=FALSE, fig.height=4}
+library(tidyverse)
+typing.long %>% 
+  ggplot(aes(keyboard_wpm, log(phone_wpm), color = phone_type))+
+  geom_smooth(method = "lm") +
+  geom_point(alpha = 0.6) +
+  labs(
+    title = "Figure 1. Keyboard typing speed vs natural log of phone typing speed.",
+    subtitle = "Two lines fitted by phone type.",
+    x = "Keyboard typing speed, WPM",
+    y = "Natural log of phone typing speed, ln(WPM)",
+    color = "Phone type"
+  ) +
+  theme_minimal()
+```
+
+Figure 1 demonstrated the association between the keyboard typing speed and natural log of phone typing speed. The two lines fitted by phone types had similar slopes but different intercepts, corresponding to the significant categorical predictor phone types in the final model. Also, the positive slopes corresponded to the positive coefficient estimate for the keyboard typing speed.
+
+Finally, regarding the research question, the model suggested that students with higher keyboard typing speed tended to have higher smartphone typing speed, controlling for keyboard typing accuracy, phone type, and phone typing accuracy.
+
+
+# Full statistical analysis
+
+## Set up and data cleaning
+
+This section was for library set up and data cleaning. The process of data cleaning was documented in the data cleaning section before.
+
+```{r setup}
+# load libraries
+library(tidyverse)
+library(stringr)
+library(lme4)
+library(lmerTest)
+library(lmtest)
+library(ggplot2)
+library(car)
+library(MuMIn)
+library(kableExtra)
+```
+
+```{r data cleaning}
+# import data
+typing <- read.csv("typingdata.csv")
+
+# change column names first
+colnames(typing) <- c("keyboard_wpm_1", "keyboard_acc_1", 
+                      "keyboard_wpm_2", "keyboard_acc_2", 
+                      "keyboard_wpm_3", "keyboard_acc_3",
+                      "phone_wpm_1", "phone_acc_1", 
+                      "phone_wpm_2", "phone_acc_2", 
+                      "phone_wpm_3", "phone_acc_3",
+                      "number_of_finger", "phone_type",
+                      "screen_size", "keyboard_type",
+                      "age", "keyboard_freq", "gamer_status",
+                      "keyboard_instrument", "physical_limitation",
+                      "English_fluency")
+
+# remove WPM and %
+typing$keyboard_wpm_1 <- str_remove(typing$keyboard_wpm_1, "WPM")
+typing$keyboard_wpm_2 <- str_remove(typing$keyboard_wpm_2, "WPM")
+typing$keyboard_wpm_3 <- str_remove(typing$keyboard_wpm_3, "WPM")
+
+typing$keyboard_acc_1 <- str_remove(typing$keyboard_acc_1, "%")
+typing$keyboard_acc_2 <- str_remove(typing$keyboard_acc_2, "%")
+typing$keyboard_acc_3 <- str_remove(typing$keyboard_acc_3, "%")
+
+typing$phone_wpm_1 <- str_remove(typing$phone_wpm_1, "WPM")
+typing$phone_wpm_2 <- str_remove(typing$phone_wpm_2, "WPM")
+typing$phone_wpm_3 <- str_remove(typing$phone_wpm_3, "WPM")
+
+typing$phone_acc_1 <- str_remove(typing$phone_acc_1, "%")
+typing$phone_acc_2 <- str_remove(typing$phone_acc_2, "%")
+typing$phone_acc_3 <- str_remove(typing$phone_acc_3, "%")
+
+typing[,1:12] <- lapply(typing[,1:12], as.numeric)
+
+# change the screen size to numeric type
+
+# change one value of "length x width" to be separated by ";"
+typing$screen_size <- str_replace_all(typing$screen_size, "x", ";")
+# remove all alphabetical letters
+typing$screen_size <- str_replace_all(typing$screen_size, "[:alpha:]", "")
+
+# remove anything after the last ; if there are more than 1 ;
+rmv <- ifelse(str_count(typing$screen_size, ";") > 1, 
+       gsub('^(.*);.*$', '\\1', typing$screen_size),
+       typing$screen_size)
+
+# create a vector of new screen size
+new_ss <- numeric(length(rmv))
+
+# calculate the diag length for the two observations
+for (i in 1:length(rmv)){
+  new_ss[i] <- ifelse(str_count(rmv[i], ";") > 0, # if there is ;
+                   ifelse(as.numeric(str_split(rmv[i], ";")[[1]][1]) > 20, # if measured in mm
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1])/10)^2 +
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2])/10)^2),
+                          sqrt((as.numeric(str_split(rmv[i], ";")[[1]][1]))^2 + # if measured in cm
+                            (as.numeric(str_split(rmv[i], ";")[[1]][2]))^2)), 
+                   rmv[i]) # if no ;
+}
+
+typing$screen_size <- as.numeric(new_ss)
+
+typing <- typing %>% 
+  mutate(keyboard_type = 
+           case_when(
+             keyboard_type == "A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)" ~ "laptop",
+             TRUE ~ "mechanical"),
+         English_fluency =
+           case_when(English_fluency == "Conversational fluency in English" ~ "conversational",
+                     English_fluency == "Professional fluency in English" ~ "professional",
+                     TRUE ~ "fully"),
+         screen_size = case_when(screen_size < 10 ~ round(screen_size*2.54,4), 
+                                 TRUE ~ round(screen_size,4)),
+         keyboard_wpm_avg = (keyboard_wpm_1 + keyboard_wpm_2 + keyboard_wpm_3)/3,
+         keyboard_acc_avg = (keyboard_acc_1 + keyboard_acc_2 + keyboard_acc_3)/3,
+         phone_wpm_avg = (phone_wpm_1 + phone_wpm_2 + phone_wpm_3)/3,
+         phone_acc_avg = (phone_acc_1 + phone_acc_2 + phone_acc_3)/3)
+
+# round to 4 decimal places because the most in data is 4 
+# assuming there are errors in measuring and roundings in calculations, 
+# so added zeros instead of taking off zeros
+
+# create a tidy long dataset
+typing.long <- typing %>% 
+  mutate(id = seq(1,nrow(typing))) %>% 
+  pivot_longer(
+    keyboard_wpm_1:phone_acc_3,
+    names_to = c(".value", "time"),
+    names_pattern = "^(.+)_(.)") %>% 
+  select(c(15:20, 1:10)) # change column orders and exclude average variables
+```
+
+```{r}
+glimpse(typing.long)
+```
+
+
+## Analysis
+
+A full model with id as random effect and all variables except for number of fingers as fixed effects was fitted by REML. After residual analysis, there were deviations at both ends in the Normal Q-Q plot and obvious fanning pattern in the residual versus fitted value plot.
+
+```{r original full model}
+# original full model
+full.mod.original <- lmer(phone_wpm ~ keyboard_wpm + time + screen_size + 
+                            keyboard_type + physical_limitation + 
+                            English_fluency + phone_type + keyboard_instrument + 
+                            gamer_status + keyboard_freq + keyboard_acc + 
+                            phone_acc + (1 | id), data = typing.long)
+
+summary(full.mod.original)
+
+# residual analysis
+
+par(mfrow=c(2,3))
+
+# condition 1
+plot(typing.long$phone_wpm ~ fitted(full.mod.original))
+abline(a = 0, b = 1)
+# appeared to be a diagonal line
+# passed condition 1, can use residual plots to reveal violations
+
+# residual plot and QQ plot
+r <- resid(full.mod.original)
+qqnorm(r) # violation at both ends
+qqline(r)
+plot(fitted(full.mod.original),r) # fanning pattern
+abline(h=0)
+plot(typing.long$keyboard_wpm,r)
+abline(0,0)
+plot(typing.long$keyboard_acc,r)
+abline(0,0)
+plot(typing.long$phone_acc,r)
+abline(0,0)
+```
+To address the potential assumption violations in the full model, a natural log transformation was applied to the response and another transformed full model was fitted. After transformation, it could be seen in the residual plots and Normal Q-Q plots that there were no obvious pattern or deviations, and thus the assumptions of linear mixed model appeared to be satisfied.
+
+```{r log-transformed full model}
+# log-transformed full model
+full.mod <- lmer(log(phone_wpm) ~ keyboard_wpm + time + screen_size +
+                   keyboard_type + 
+                   physical_limitation + English_fluency + phone_type +
+                   keyboard_instrument + gamer_status + keyboard_freq +
+                   keyboard_acc + phone_acc + (1 | id), data = typing.long)
+
+summary(full.mod)
+
+
+par(mfrow=c(2,3))
+
+# condition 2
+# can't access correlation between categorical variables
+
+# condition 1
+plot(log(typing.long$phone_wpm) ~ fitted(full.mod))
+abline(a = 0, b = 1)
+# appeared to be a diagonal line
+# passed condition 1, can use residual plots to reveal violations
+
+# residual analysis
+
+# residual plot and QQ plot
+
+r <- resid(full.mod)
+qqnorm(r) # better at ends 
+qqline(r)
+plot(fitted(full.mod),r) # no obvious pattern
+abline(h=0)
+plot(typing.long$keyboard_wpm,r)
+abline(0,0)
+plot(typing.long$keyboard_acc,r)
+abline(0,0)
+plot(typing.long$phone_acc,r)
+abline(0,0)
+```
+
+In the model summary of transformed full model, the 4 significant predictors were phone typing accuracy, phone type, keyboard typing speed and keyboard typing accuracy. As a result, a reduced model with these 4 predictors and subject random effect was fitted.
+
+In the transformed reduced model, all 4 predictors had coefficients with significant p-values smaller than 0.05. Also, the residual analysis did not reveal any obvious violations of assumptions. Multicollinearity was assessed using variance inflation factor (VIF). There was no VIF greater than 5, indicating no severe multicollinearity. 
+
+```{r reduced model}
+# fit a reduced model
+reduced.mod <- lmer(log(phone_wpm) ~ keyboard_wpm + phone_type + keyboard_acc + 
+                      phone_acc + (1 | id), data = typing.long)
+summary(reduced.mod)
+
+# residual analysis
+
+par(mfrow=c(2,3))
+
+# condition 1
+plot(log(typing.long$phone_wpm) ~ fitted(reduced.mod))
+abline(a = 0, b = 1)
+# appeared to be a diagonal line
+# passed condition 1, can use residual plots to reveal violations
+
+# residual plots and QQ plot
+r <- resid(reduced.mod)
+qqnorm(r)  
+qqline(r)
+plot(fitted(full.mod),r) # no obvious pattern
+abline(h=0)
+
+# residual vs covariates
+plot(typing.long$keyboard_wpm,r)
+abline(0,0)
+plot(typing.long$keyboard_acc,r)
+abline(0,0)
+plot(typing.long$phone_acc,r)
+abline(0,0)
+
+# test multicollinearity
+vif(reduced.mod) # no severe multicollinearity (VIF > 5)
+```
+
+For reference, an untransformed reduced model was fitted with the same fixed and random effects as the transformed reduced model, and obvious violations of assumptions were observed in residual analysis. The Normal Q-Q plot appeared to have large deviations from the diagonal line at both ends in the plot, and there was a fanning pattern in the residual versus fitted value plot, as seen in the untransformed full model. As a result, this justified the transformation of response variable.
+
+```{r reduced model untransformed for reference}
+reduced.mod.untrans <- lmer(phone_wpm ~ keyboard_wpm + phone_type + keyboard_acc + 
+                      phone_acc + (1 | id), data = typing.long)
+summary(reduced.mod.untrans)
+
+# residual plots and QQ plot
+
+par(mfrow=c(2,3))
+
+# condition 1
+plot(typing.long$phone_wpm ~ fitted(reduced.mod.untrans))
+abline(a = 0, b = 1)
+# appeared to be a diagonal line
+# passed condition 1, can use residual plots to reveal violations
+
+r <- resid(reduced.mod.untrans)
+qqnorm(r) # obvious worse than transformed one, especially at two ends
+qqline(r)
+plot(fitted(reduced.mod.untrans),r)
+abline(h=0)
+# fanning pattern, as seen in the untransformed full model
+
+plot(typing.long$keyboard_wpm,r)
+abline(0,0)
+plot(typing.long$keyboard_acc,r)
+abline(0,0)
+plot(typing.long$phone_acc,r)
+abline(0,0)
+```
+A stepwise model selection of both fixed and random effects was applied to the transformed full model. It was a procedure based on AIC, and the resulted model was the same as the previous transformed reduced model.
+
+```{r stepwise, cache=TRUE}
+# performs automatic model selection of fixed and 
+# random parts of the linear mixed model
+# based on AIC
+
+step(full.mod, direction = "both")
+```
+
+Another automatic model selection based on both AIC and BIC was performed on the transformed full model. The two resulted models were also the same as the transformed reduced model.
+
+```{r automatic, cache=TRUE}
+# Use AIC and BIC to select the best model
+options(na.action = "na.fail")
+best_model <- dredge(full.mod)
+
+model.sel(best_model, rank = AIC)[1,] # same as selected model 
+model.sel(best_model, rank = BIC)[1,] # same as AIC
+```
+
+Because models fitted by REML could not be compared using likelihood ratio tests unless they had the same fixed effects, two test full and reduced models were fitted using ML and compared using likelihood ratio test. The result provided evidence that the simpler model fitted the data as well as the complex model.
+
+```{r ml}
+# models are comparable using likelihood ratio test when we use ML, not REML
+test1 <- lmer(log(phone_wpm) ~ keyboard_wpm + phone_type + keyboard_acc + 
+                phone_acc + (1 | id),  
+              REML = F, data = typing.long)
+  
+test2 <- lmer(log(phone_wpm) ~ keyboard_wpm + time + screen_size + 
+                keyboard_type + physical_limitation + English_fluency + 
+                phone_type + keyboard_instrument + gamer_status + keyboard_freq + 
+                keyboard_acc + phone_acc + (1 | id), 
+              REML = F, data = typing.long)
+  
+
+lmtest::lrtest(test1, test2) # again, reduced model is preferred
+```
+
+An additional model with the same predictors as the reduced model but an extra random slope for phone type was fitted, suggesting that different subjects may have different slopes and intercepts. However, the likelihood ratio test of this model and the simpler reduced model indicated no evidence against that the simpler model fitted the data just as well.
+
+```{r random slope}
+slope.mod <- lmer(log(phone_wpm) ~ keyboard_wpm + phone_type + keyboard_acc + 
+                    phone_acc + (1 + phone_type | id), data = typing.long)
+summary(slope.mod)
+
+# can???t do LR tests with models fit with REML unless the fixed effects 
+# are exactly the same
+lmtest::lrtest(reduced.mod, slope.mod) # fail to reject, keep the small model
+```
+
+As a result, the transformed reduced model was selected as the final model. Table 1 presented the model summary of the final model. For better interpretability, the model coefficient estimates were transformed using exponentiation. Because there was one negative estimated coefficient in the log model, the negatives of coefficient estimates were exponentiated as well.
+
+```{r final}
+final <- summary(reduced.mod)$coef 
+rownames(final) <- c("intercept", "keyboard typing speed (WPM)", 
+                                  "Phone type: iPhone", 
+                                  "Keyboard typing accuracy (%)", 
+                                  "Phone typing accuracy (%)")
+final %>% kableExtra::kable(booktab = T,
+                    caption = "Model summary of the final model for natural log of phone typing speed") %>% 
+  kable_styling(latex_options = c("HOLD_position"))
+
+# exponentiate the coefficients
+exp(summary(reduced.mod)$coef[,1]) #e^beta
+exp(-summary(reduced.mod)$coef[,1]) #e^-beta
+```
+
+
+
+
